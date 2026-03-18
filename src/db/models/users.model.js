@@ -46,7 +46,10 @@ const userSchema = new Schema(
       type: Boolean,
       default: false,
     },
-
+    isEnableTwoFactorAuth: {
+      type: Boolean,
+      default: false,
+    },
     credential_change_at: Date,
     deletedAt: Date,
     profileVisitCount: {

@@ -1,1 +1,1 @@
-export const otp = Math.floor(100000 + Math.random() * 900000);
+export const otpGenerated = Math.floor(100000 + Math.random() * 900000);

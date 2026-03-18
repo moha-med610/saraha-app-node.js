@@ -114,4 +114,56 @@ router.patch("/reset-password", verifyToken, async (req, res) => {
   });
 });
 
+router.patch("/enable-two-factor-auth", verifyToken, async (req, res) => {
+  const { isEnable } = req.body;
+  await service.enableTwoFactorAuthService({ user: req.user, isEnable });
+
+  return response({
+    res,
+    message: "Two Factor Authentication enabled successfully",
+    data: {},
+  });
+});
+
+router.post("/verify-otp", async (req, res) => {
+  const { email, otp } = req.body;
+
+  const data = await service.verifyOtpService({
+    email,
+    otp,
+  });
+  return response({
+    res,
+    statusCode: 201,
+    data,
+  });
+});
+
+router.get("/forget-password", verifyToken, async (req, res) => {
+  await service.forgetPasswordService({ user: req.user });
+  return response({
+    res,
+    message: "OTP Sent To Your Email",
+    data: {},
+  });
+});
+
+router.post("/reset-password", verifyToken, async (req, res) => {
+  const { otp, newPassword, confirmPassword } = req.body;
+
+  const data = await service.resetPasswordService({
+    otp,
+    newPassword,
+    confirmPassword,
+    user: req.user,
+  });
+
+  return response({
+    res,
+    statusCode: 202,
+    message: "Password Updated Successfully",
+    data,
+  });
+});
+
 export default router;

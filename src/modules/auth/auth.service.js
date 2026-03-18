@@ -1,6 +1,6 @@
 import { Users } from "../../db/models/users.model.js";
 import { sendEmail } from "../../config/nodemailer.config.js";
-import { otp } from "../../utils/otpGenerator.js";
+import { otpGenerated } from "../../utils/otpGenerator.js";
 import { ServerError } from "../../utils/serverError.js";
 import bcrypt from "bcrypt";
 import { OAuth2Client } from "google-auth-library";
@@ -8,6 +8,7 @@ import { PROVIDER } from "../../constants/provider.js";
 import { Logout } from "../../constants/flag.js";
 import { accessTokenService, refreshTokenService } from "../../utils/tokens.js";
 import { RevokeToken } from "../../db/models/token.model.js";
+import { redisClient } from "../../db/redis.connection.js";
 
 const client = new OAuth2Client();
 
@@ -46,8 +47,8 @@ export const signupService = async ({
 
   sendEmail({
     email: newUser.email,
-    otp,
-    userName: newUser.firstName,
+    otp: otpGenerated,
+    userName: newUser.userName,
   }).catch((e) => console.log("Error to Send Email"));
 
   return { accessToken, refreshToken };
@@ -68,8 +69,23 @@ export const loginService = async ({ email, password }) => {
     throw new ServerError(false, 400, "Invalid Credentials");
   }
 
-  findUser.otpExpire = new Date(Date.now() + 5 * 60 * 1000);
   await findUser.save();
+
+  if (findUser.isEnableTwoFactorAuth) {
+    await redisClient.setEx(
+      `${findUser.email}:otp`,
+      5 * 60,
+      otpGenerated.toString(),
+    );
+
+    sendEmail({
+      email: findUser.email,
+      otp: otpGenerated,
+      userName: findUser.userName,
+    });
+
+    return "Check Your Email, We Send OTP";
+  }
 
   const accessToken = accessTokenService({
     payload: { id: findUser._id, role: findUser.role, email: findUser.email },
@@ -79,11 +95,6 @@ export const loginService = async ({ email, password }) => {
     payload: { id: findUser._id, role: findUser.role, email: findUser.email },
   });
 
-  sendEmail({
-    email: findUser.email,
-    userName: findUser.firstName,
-    otp,
-  });
   return { accessToken, refreshToken };
 };
 
@@ -154,10 +165,80 @@ export const logoutService = async ({ user, jti, iat, flag = Logout.all }) => {
   return { msg: "Logged out Successfully" };
 };
 
-export const forgetPasswordService = async ({ user }) => {};
+export const enableTwoFactorAuthService = async ({ user, isEnable }) => {
+  user.isEnableTwoFactorAuth = isEnable;
+  await findUser.save();
+
+  return { msg: "Two Factor Authentication Enabled Successfully" };
+};
+
+export const verifyOtpService = async ({ otp, email }) => {
+  const findUser = await Users.findOne({ email });
+  if (!findUser) {
+    throw new ServerError(false, 404, "User Not Found");
+  }
+
+  const verifyOtp = await redisClient.get(`${email}:otp`);
+
+  if (!verifyOtp || verifyOtp != otp) {
+    throw new ServerError(
+      false,
+      400,
+      "Invalid OTP, Please Check Your OTP and Try Again",
+    );
+  }
+
+  await redisClient.del(`${email}:otp`);
+
+  const accessToken = accessTokenService({
+    payload: { id: findUser._id, role: findUser.role, email: findUser.email },
+  });
+
+  const refreshToken = refreshTokenService({
+    payload: { id: findUser._id, role: findUser.role, email: findUser.email },
+  });
+
+  return { accessToken, refreshToken };
+};
+
+export const forgetPasswordService = async ({ user }) => {
+  sendEmail({
+    email: user.email,
+    otp: otpGenerated,
+    userName: user.userName,
+  });
+
+  await redisClient.setEx(
+    `${user.email}:forgetPasswordOtp`,
+    5 * 60,
+    otpGenerated.toString(),
+  );
+
+  return "OTP Send To Your Email";
+};
 
 export const resetPasswordService = async ({
-  user,
+  otp,
   newPassword,
-  repeatPassword,
-}) => {};
+  confirmPassword,
+  user,
+}) => {
+  const verifyOtp = await redisClient.get(`${user.email}:forgetPasswordOtp`);
+
+  if (!verifyOtp || verifyOtp != otp) {
+    throw new ServerError(false, 400, "Invalid OTP");
+  }
+
+  if (newPassword != confirmPassword) {
+    throw new ServerError(false, 400, "Password Not Match");
+  }
+
+  const hashNewPassword = await bcrypt.hash(newPassword, 12);
+  const updatePassword = await Users.updateOne(
+    { _id: user.id },
+    { password: hashNewPassword },
+    { new: true },
+  );
+
+  return { updatePassword };
+};
