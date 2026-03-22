@@ -201,15 +201,20 @@ export const verifyOtpService = async ({ otp, email }) => {
   return { accessToken, refreshToken };
 };
 
-export const forgetPasswordService = async ({ user }) => {
+export const forgetPasswordService = async ({ email }) => {
+  const findUser = await Users.findOne({ email });
+  if (!findUser) {
+    throw new ServerError(false, 400, "User Not Found");
+  }
+
   sendEmail({
-    email: user.email,
+    email: findUser.email,
     otp: otpGenerated,
-    userName: user.userName,
+    userName: findUser.userName,
   });
 
   await redisClient.setEx(
-    `${user.email}:forgetPasswordOtp`,
+    `${email}:forgetPasswordOtp`,
     5 * 60,
     otpGenerated.toString(),
   );

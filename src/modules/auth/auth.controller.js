@@ -139,8 +139,9 @@ router.post("/verify-otp", async (req, res) => {
   });
 });
 
-router.get("/forget-password", verifyToken, async (req, res) => {
-  await service.forgetPasswordService({ user: req.user });
+router.post("/forget-password", async (req, res) => {
+  const { email } = req.body;
+  await service.forgetPasswordService({ email });
   return response({
     res,
     message: "OTP Sent To Your Email",
