@@ -141,7 +141,9 @@ router.post("/verify-otp", async (req, res) => {
 
 router.post("/forget-password", async (req, res) => {
   const { email } = req.body;
+
   await service.forgetPasswordService({ email });
+
   return response({
     res,
     message: "OTP Sent To Your Email",
@@ -149,20 +151,45 @@ router.post("/forget-password", async (req, res) => {
   });
 });
 
-router.post("/reset-password", verifyToken, async (req, res) => {
-  const { otp, newPassword, confirmPassword } = req.body;
+router.post("/reset-password", async (req, res) => {
+  const { token } = req.query;
+  const { newPassword } = req.body;
 
   const data = await service.resetPasswordService({
-    otp,
+    token,
     newPassword,
-    confirmPassword,
-    user: req.user,
   });
 
   return response({
     res,
     statusCode: 202,
-    message: "Password Updated Successfully",
+    message: "Password Reset Successfully",
+    data,
+  });
+});
+
+router.post("/confirm-email", async (req, res) => {
+  const { email, otp } = req.body;
+
+  await service.confirmEmailService({ email, otp });
+
+  return response({
+    res,
+    statusCode: 200,
+    message: "Email Confirmed Successfully",
+    data: {},
+  });
+});
+
+router.post("/confirm-otp", async (req, res) => {
+  const { email, otp } = req.body;
+
+  const data = await service.confirmOtpService({ email, otp });
+
+  return response({
+    res,
+    statusCode: 200,
+    message: "OTP Verified Successfully",
     data,
   });
 });

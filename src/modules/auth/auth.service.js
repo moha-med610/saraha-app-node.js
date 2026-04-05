@@ -9,6 +9,11 @@ import { Logout } from "../../constants/flag.js";
 import { accessTokenService, refreshTokenService } from "../../utils/tokens.js";
 import { RevokeToken } from "../../db/models/token.model.js";
 import { redisClient } from "../../db/redis.connection.js";
+import {
+  otpEmailTemplate,
+  resetPasswordEmailTemplate,
+} from "../../utils/emailTemp.js";
+import { generateResetToken, hashToken } from "../../utils/resetPassword.js";
 
 const client = new OAuth2Client();
 
@@ -24,6 +29,7 @@ export const signupService = async ({
   }
 
   let hashedPassword;
+
   if (password) {
     hashedPassword = await bcrypt.hash(password, 12);
   }
@@ -37,21 +43,22 @@ export const signupService = async ({
 
   await newUser.save();
 
-  const accessToken = accessTokenService({
-    payload: { id: newUser._id, role: newUser.role, email: newUser.email },
-  });
-
-  const refreshToken = refreshTokenService({
-    payload: { id: newUser._id, role: newUser.role, email: newUser.email },
-  });
-
   sendEmail({
     email: newUser.email,
-    otp: otpGenerated,
-    userName: newUser.userName,
+    html: otpEmailTemplate({
+      userName: newUser.firstName,
+      otpCode: otpGenerated.toString(),
+      expiryMinutes: 5,
+    }),
   }).catch((e) => console.log("Error to Send Email"));
 
-  return { accessToken, refreshToken };
+  await redisClient.setEx(
+    `${newUser.email}:confirmEmailOtp`,
+    5 * 60,
+    otpGenerated.toString(),
+  );
+
+  return { message: "User Created Successfully, Check Your Email For OTP" };
 };
 
 export const loginService = async ({ email, password }) => {
@@ -60,16 +67,16 @@ export const loginService = async ({ email, password }) => {
   if (!findUser) {
     throw new ServerError(false, 400, "Invalid Credentials");
   }
+
   if (findUser.provider === PROVIDER.google) {
     throw new ServerError(false, 400, "use google login");
   }
 
   const isCorrectPassword = await bcrypt.compare(password, findUser.password);
+
   if (!isCorrectPassword) {
     throw new ServerError(false, 400, "Invalid Credentials");
   }
-
-  await findUser.save();
 
   if (findUser.isEnableTwoFactorAuth) {
     await redisClient.setEx(
@@ -78,11 +85,23 @@ export const loginService = async ({ email, password }) => {
       otpGenerated.toString(),
     );
 
+    findUser.otpExpire = new Date(Date.now() + 5 * 60 * 1000);
+    await findUser.save();
+
+    await redisClient.setEx(
+      `${findUser.email}:confirmOtp`,
+      5 * 60,
+      otpGenerated.toString(),
+    );
+
     sendEmail({
       email: findUser.email,
-      otp: otpGenerated,
-      userName: findUser.userName,
-    });
+      html: otpEmailTemplate({
+        userName: findUser.firstName,
+        otpCode: otpGenerated.toString(),
+        expiryMinutes: 5,
+      }),
+    }).catch((e) => console.log("Error to Send Email"));
 
     return "Check Your Email, We Send OTP";
   }
@@ -172,78 +191,115 @@ export const enableTwoFactorAuthService = async ({ user, isEnable }) => {
   return { msg: "Two Factor Authentication Enabled Successfully" };
 };
 
-export const verifyOtpService = async ({ otp, email }) => {
-  const findUser = await Users.findOne({ email });
-  if (!findUser) {
+export const forgetPasswordService = async ({ email }) => {
+  const user = await Users.findOne({ email });
+
+  if (!user) {
     throw new ServerError(false, 404, "User Not Found");
   }
 
-  const verifyOtp = await redisClient.get(`${email}:otp`);
+  const resetToken = generateResetToken();
+  const hashedResetToken = hashToken(resetToken);
 
-  if (!verifyOtp || verifyOtp != otp) {
-    throw new ServerError(
-      false,
-      400,
-      "Invalid OTP, Please Check Your OTP and Try Again",
-    );
-  }
-
-  await redisClient.del(`${email}:otp`);
-
-  const accessToken = accessTokenService({
-    payload: { id: findUser._id, role: findUser.role, email: findUser.email },
-  });
-
-  const refreshToken = refreshTokenService({
-    payload: { id: findUser._id, role: findUser.role, email: findUser.email },
-  });
-
-  return { accessToken, refreshToken };
-};
-
-export const forgetPasswordService = async ({ email }) => {
-  const findUser = await Users.findOne({ email });
-  if (!findUser) {
-    throw new ServerError(false, 400, "User Not Found");
-  }
+  user.resetPasswordToken = hashedResetToken;
+  user.resetPasswordExpire = new Date(Date.now() + 10 * 60 * 1000);
+  await user.save();
 
   sendEmail({
-    email: findUser.email,
-    otp: otpGenerated,
-    userName: findUser.userName,
+    email: user.email,
+    html: resetPasswordEmailTemplate({
+      resetLink: `http://localhost:${process.env.PORT}/reset-password?token=${resetToken}`,
+      userName: user.userName,
+      email: user.email,
+    }),
   });
-
-  await redisClient.setEx(
-    `${email}:forgetPasswordOtp`,
-    5 * 60,
-    otpGenerated.toString(),
-  );
-
-  return "OTP Send To Your Email";
 };
 
-export const resetPasswordService = async ({
-  otp,
-  newPassword,
-  confirmPassword,
-  user,
-}) => {
-  const verifyOtp = await redisClient.get(`${user.email}:forgetPasswordOtp`);
+export const resetPasswordService = async ({ token, newPassword }) => {
+  const hashedToken = hashToken(token);
 
-  if (!verifyOtp || verifyOtp != otp) {
+  const user = await Users.findOne({
+    resetPasswordToken: hashedToken,
+    resetPasswordExpire: { $gt: new Date() },
+  });
+
+  if (!user) {
+    throw new ServerError(false, 400, "Invalid or expired reset token");
+  }
+
+  const hashedPassword = await bcrypt.hash(newPassword, 12);
+
+  user.password = hashedPassword;
+  user.resetPasswordToken = undefined;
+  user.resetPasswordExpire = undefined;
+  await user.save();
+};
+
+export const confirmEmailService = async ({ email, otp }) => {
+  const user = await Users.findOne({ email });
+
+  if (!user) {
+    throw new ServerError(false, 404, "User Not Found");
+  }
+
+  const confirmEmailOtp = await redisClient.get(
+    `${user.email}:confirmEmailOtp`,
+  );
+
+  if (new Date(user.otpExpire) <= Date.now()) {
+    throw new ServerError(false, 400, "OTP Expired");
+  }
+
+  if (!confirmEmailOtp || confirmEmailOtp != otp) {
     throw new ServerError(false, 400, "Invalid OTP");
   }
 
-  if (newPassword != confirmPassword) {
-    throw new ServerError(false, 400, "Password Not Match");
+  user.isActivate = true;
+  user.otpExpire = undefined;
+  await user.save();
+
+  await redisClient.del(`${user.email}:confirmEmailOtp`);
+
+  const accessToken = accessTokenService({
+    payload: { id: user._id, role: user.role, email: user.email },
+  });
+
+  const refreshToken = refreshTokenService({
+    payload: { id: user._id, role: user.role, email: user.email },
+  });
+
+  return { message: "Email Confirmed Successfully", accessToken, refreshToken };
+};
+
+export const confirmOtpService = async ({ email, otp }) => {
+  const user = await Users.findOne({ email });
+
+  if (!user) {
+    throw new ServerError(false, 404, "User Not Found");
   }
 
-  const hashNewPassword = await bcrypt.hash(newPassword, 12);
-  const updatePassword = await Users.updateOne(
-    { _id: user.id },
-    { password: hashNewPassword },
-    { new: true },
-  );
+  const confirmOtp = await redisClient.get(`${user.email}:confirmOtp`);
 
-  return { updatePassword };
+  if (!confirmOtp || confirmOtp != otp) {
+    throw new ServerError(false, 400, "Invalid OTP");
+  }
+
+  if (new Date(user.otpExpire) <= Date.now()) {
+    throw new ServerError(false, 400, "OTP Expired");
+  }
+
+  user.otpExpire = undefined;
+  await user.save();
+
+  await redisClient.del(`${user.email}:confirmOtp`);
+
+  const accessToken = accessTokenService({
+    payload: { id: user._id, role: user.role, email: user.email },
+  });
+
+  const refreshToken = refreshTokenService({
+    payload: { id: user._id, role: user.role, email: user.email },
+  });
+
+  return { message: "OTP Verified Successfully", accessToken, refreshToken };
 };

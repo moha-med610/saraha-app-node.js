@@ -8,7 +8,11 @@ export const fileTypes = {
   video: ["video/mp4", "video/mpeg", "video/quicktime"],
 };
 
-export const upload = ({ dest = "general", validation = fileTypes.image }) => {
+export const upload = ({
+  dest = "general",
+  validation = fileTypes.image,
+  fileSize = 2 * 1024 * 1024,
+}) => {
   const storage = diskStorage({
     destination: async (req, file, cb) => {
       const finalPath = `./uploads/${dest}`;
@@ -42,7 +46,7 @@ export const upload = ({ dest = "general", validation = fileTypes.image }) => {
     storage,
     fileFilter,
     limits: {
-      fileSize: 2 * 1024 * 1024,
+      fileSize: fileSize,
     },
   });
 };

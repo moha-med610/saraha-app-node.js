@@ -1,7 +1,6 @@
 import mongoose, { model, Schema } from "mongoose";
 import { ROLES } from "../../constants/roles.js";
 import { PROVIDER } from "../../constants/provider.js";
-import bcrypt from "bcrypt";
 
 const userSchema = new Schema(
   {
@@ -25,7 +24,13 @@ const userSchema = new Schema(
       required: true,
       unique: true,
     },
-    otpExpire: Date,
+    otpExpire: { type: Date },
+    resetPasswordToken: {
+      type: String,
+    },
+    resetPasswordExpire: {
+      type: Date,
+    },
     password: {
       type: String,
       required: function () {

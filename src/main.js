@@ -6,6 +6,7 @@ import authRouter from "./modules/auth/auth.controller.js";
 import cors from "cors";
 import usersRouter from "./modules/users/users.controller.js";
 import { redisConnect } from "./db/redis.connection.js";
+import messageRouter from "./modules/messages/messages.controller.js";
 
 export const main = async () => {
   const app = express();
@@ -13,11 +14,12 @@ export const main = async () => {
 
   app.use(express.json());
   app.use(cors());
-  app.use("/uploads", express.static("./uploads"));
 
   // routes
+  app.use("/uploads", express.static("./uploads"));
   app.use("/auth", authRouter);
   app.use("/users", usersRouter);
+  app.use("/messages", messageRouter);
 
   // error handler middleware
   app.use(notFoundMiddleware);

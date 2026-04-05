@@ -1,5 +1,4 @@
 import nodemailer from "nodemailer";
-import { otpEmailTemplate } from "../utils/emailTemp.js";
 
 const transport = nodemailer.createTransport({
   service: "gmail",
@@ -9,15 +8,11 @@ const transport = nodemailer.createTransport({
   },
 });
 
-export const sendEmail = async ({ email, userName, otp }) => {
+export const sendEmail = async ({ email, html }) => {
   await transport.sendMail({
     from: "Saraha App",
     to: email,
     subject: "Verification Code",
-    html: otpEmailTemplate({
-      userName,
-      otpCode: otp,
-      expiryMinutes: 5,
-    }),
+    html: html,
   });
 };
